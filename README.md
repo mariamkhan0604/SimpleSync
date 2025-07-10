@@ -1,7 +1,7 @@
-SecureSync
+SimpleSync
 ==========
 
-SecureSync is a C++-based secure file synchronization system designed to ensure safe and efficient syncing between clients and a central server. It uses SSL/TLS encryption for secure communication and SHA-256 hashing to detect file changes. Each client has its own isolated folder on the server, and the system is capable of syncing only modified or new files.
+SimpleSync is a C++-based secure file synchronization system designed to ensure safe and efficient syncing between clients and a central server. It uses SSL/TLS encryption for secure communication and SHA-256 hashing to detect file changes. Each client has its own isolated folder on the server, and the system is capable of syncing only modified or new files.
 
 Features
 --------
