@@ -21,3 +21,4 @@ server_data/
 # Logs or dumps (if any)
 *.log
 *.dump
+test_files/
