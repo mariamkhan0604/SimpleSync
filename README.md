@@ -22,21 +22,7 @@ Technologies Used
 
 Project Structure
 -----------------
-SecureSync/
-├── bin/              # Compiled binaries (client_exec, server_exec)
-├── certs/            # SSL certificate and key
-├── client_hashes/    # Hash logs per client (client-side)
-├── server_data/      # Per-client synced data from client
-├── server_hashes/    # Hash logs per client (server-side)
-├── include/          # Header files
-├── src/              # Source code
-│   ├── client.cpp
-│   ├── server.cpp
-│   └── utils/
-├── test_files/       # Files to be synced by the client
-├── Makefile
-├── README.md
-└── .gitignore
+<pre> SecureFileSync/ ├── bin/ # Compiled binaries (client_exec, server_exec) ├── certs/ # SSL certificate and key ├── client_hashes/ # Hash logs per client (client-side tracking) ├── server_data/ # Server-side storage for each client ├── server_hashes/ # Hash logs per client (server-side tracking) ├── include/ # Header files ├── src/ # Source code │ ├── client.cpp │ ├── server.cpp │ └── utils/ ├── test_files/ # Input directory for client files ├── Makefile ├── README.md └── .gitignore </pre>
 
 
 Build Instructions (VSCode Friendly)
