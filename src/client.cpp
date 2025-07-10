@@ -196,28 +196,26 @@
 // }
 // Modularized client.cpp with full function definitions
 #include <iostream>
-#include <unistd.h>
-#include <string.h>
+#include <fstream>
+#include <filesystem>
+#include <vector>
+#include <unordered_map>
+#include <string>
+#include <sstream>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <filesystem>
-#include <fstream>
-#include <unordered_map>
-#include <sstream>
-#include <vector>
+#include <unistd.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include "../include/sha256.h"
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 
-// SSL initialization
 SSL_CTX* initClientSSLContext() {
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
-
     const SSL_METHOD* method = TLS_client_method();
     SSL_CTX* ctx = SSL_CTX_new(method);
     if (!ctx) {
@@ -241,23 +239,15 @@ bool connectToServer(int sock, const std::string& ip, int port) {
     struct sockaddr_in serv_addr{};
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(port);
-
     if (inet_pton(AF_INET, ip.c_str(), &serv_addr.sin_addr) <= 0) {
         std::cerr << "❌ Invalid address\n";
         return false;
     }
-
     if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         std::cerr << "❌ Connection Failed\n";
         return false;
     }
     return true;
-}
-
-void receiveGreeting(SSL* ssl) {
-    char buffer[BUFFER_SIZE] = {0};
-    SSL_read(ssl, buffer, BUFFER_SIZE);
-    std::cout << "📩 Received from server: " << buffer << std::endl;
 }
 
 std::unordered_map<std::string, std::string> loadPreviousHashes(const std::string& filename) {
@@ -282,8 +272,11 @@ std::string computeFileHash(const std::string& filepath) {
     std::vector<unsigned char> normalized;
     for (size_t i = 0; i < buffer.size(); ++i) {
         if (buffer[i] == '\r' && i + 1 < buffer.size() && buffer[i + 1] == '\n') {
-            normalized.push_back('\n'); ++i;
-        } else normalized.push_back(buffer[i]);
+            normalized.push_back('\n');
+            ++i;
+        } else {
+            normalized.push_back(buffer[i]);
+        }
     }
     return picosha2::hash256_hex_string(normalized);
 }
@@ -315,7 +308,6 @@ std::vector<std::string> detectDeletedFiles(const std::unordered_map<std::string
 
 void sendHashesToServer(SSL* ssl, const std::unordered_map<std::string, std::string>& hashes) {
     std::ostringstream ss;
-    ss << "Hello from client!\n";
     for (const auto& [path, hash] : hashes) {
         ss << path << "|" << hash << "\n";
     }
@@ -381,9 +373,18 @@ void saveHashes(const std::unordered_map<std::string, std::string>& hashes, cons
     }
 }
 
-int main() {
-    const std::string directoryPath = "./test_files";
-    const std::string prevHashFile = "client_previous_hashes.txt";
+int main(int argc, char* argv[]) {
+    std::string clientID;
+    if (argc >= 2) {
+        clientID = argv[1];
+    } else {
+        char hostname[1024];
+        gethostname(hostname, sizeof(hostname));
+        clientID = std::string(hostname);
+    }
+
+    std::string directoryPath = "./test_files";
+    std::string prevHashFile = "client_hashes/client_hashes_" + clientID + ".txt";
 
     int sock = createSocket();
     if (!connectToServer(sock, "127.0.0.1", PORT)) return -1;
@@ -400,7 +401,10 @@ int main() {
 
     std::cout << "🔐 SSL handshake completed!\n";
 
-    receiveGreeting(ssl);
+    // Send client ID
+    int idLen = clientID.size();
+    SSL_write(ssl, &idLen, sizeof(idLen));
+    SSL_write(ssl, clientID.c_str(), idLen);
 
     auto oldHashes = loadPreviousHashes(prevHashFile);
     auto newHashes = computeFileHashes(directoryPath);
@@ -411,7 +415,6 @@ int main() {
 
     auto filesToSend = receiveFilesToSend(ssl);
     sendRequestedFiles(ssl, filesToSend, directoryPath);
-
     saveHashes(newHashes, prevHashFile);
 
     SSL_shutdown(ssl);

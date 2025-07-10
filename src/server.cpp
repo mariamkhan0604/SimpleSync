@@ -251,6 +251,7 @@
 //     return 0;
 // }
 // Modularized server.cpp with full function definitions
+// server.cpp
 #include <iostream>
 #include <cstring>
 #include <sys/socket.h>
@@ -261,9 +262,12 @@
 #include <fstream>
 #include <vector>
 #include <filesystem>
-#include "../include/sha256.h"
+#include <thread>
+#include <chrono>
+#include <arpa/inet.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include "../include/sha256.h"
 
 #define PORT 8080
 #define BUFFER_SIZE 4096
@@ -272,7 +276,6 @@ SSL_CTX* initServerSSLContext() {
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
-
     const SSL_METHOD* method = TLS_server_method();
     SSL_CTX* ctx = SSL_CTX_new(method);
 
@@ -321,7 +324,7 @@ int setupServerSocket() {
     return server_fd;
 }
 
-int acceptClient(int server_fd) {
+std::pair<int, std::string> acceptClient(int server_fd) {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     int new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
@@ -329,8 +332,10 @@ int acceptClient(int server_fd) {
         std::cerr << "❌ Accept failed\n";
         exit(EXIT_FAILURE);
     }
-    std::cout << "🔗 Client connected!\n";
-    return new_socket;
+
+    char client_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &address.sin_addr, client_ip, INET_ADDRSTRLEN);
+    return {new_socket, std::string(client_ip)};
 }
 
 std::unordered_map<std::string, std::string> parseSerializedData(const std::string& data) {
@@ -342,8 +347,7 @@ std::unordered_map<std::string, std::string> parseSerializedData(const std::stri
         if (delimiterPos != std::string::npos) {
             std::string path = line.substr(0, delimiterPos);
             std::string hash = line.substr(delimiterPos + 1);
-            std::string normalized = std::filesystem::path(path).lexically_normal().string();
-            result[normalized] = hash;
+            result[std::filesystem::path(path).lexically_normal().string()] = hash;
         }
     }
     return result;
@@ -362,6 +366,7 @@ std::unordered_map<std::string, std::string> receiveHashesFromClient(SSL* ssl) {
         receivedData.append(buffer, bytesRead);
         totalRead += bytesRead;
     }
+
     return parseSerializedData(receivedData);
 }
 
@@ -372,70 +377,52 @@ std::vector<std::string> receiveDeletedFiles(SSL* ssl) {
     for (int i = 0; i < numDeleted; ++i) {
         int pathLen = 0;
         SSL_read(ssl, &pathLen, sizeof(pathLen));
-        std::vector<char> delBuf(pathLen);
-        SSL_read(ssl, delBuf.data(), pathLen);
-        deletedFiles.push_back(std::filesystem::path(std::string(delBuf.begin(), delBuf.end())).lexically_normal().string());
+        std::vector<char> buffer(pathLen);
+        SSL_read(ssl, buffer.data(), pathLen);
+        deletedFiles.push_back(std::filesystem::path(std::string(buffer.begin(), buffer.end())).lexically_normal().string());
     }
     return deletedFiles;
 }
 
-void deleteFilesFromServer(const std::vector<std::string>& deletedFiles) {
-    for (const std::string& deletedPath : deletedFiles) {
-        std::string fullPath = "server_data/" + deletedPath;
-        std::filesystem::path normalized = std::filesystem::path(fullPath).lexically_normal();
+void deleteFilesFromServer(const std::vector<std::string>& files, const std::string& clientID) {
+    for (const auto& path : files) {
+        std::string fullPath = "server_data/" + clientID + "/" + path;
         try {
-            if (std::filesystem::exists(normalized)) {
-                bool removed = std::filesystem::remove(normalized);
-                std::cout << (removed ? "✅ Deleted: " : "⚠️ Not removed: ") << normalized << "\n";
+            if (std::filesystem::exists(fullPath)) {
+                std::filesystem::remove(fullPath);
+                std::cout << "✅ Deleted: " << fullPath << "\n";
             } else {
-                std::cout << "⚠️ File not found: " << normalized << "\n";
+                std::cout << "⚠️ Not Found: " << fullPath << "\n";
             }
         } catch (const std::filesystem::filesystem_error& e) {
-            std::cerr << "❌ Error deleting " << normalized << ": " << e.what() << "\n";
+            std::cerr << "❌ Delete error: " << e.what() << "\n";
         }
     }
 }
 
-std::unordered_map<std::string, std::string> loadPreviousHashes(const std::string& filename) {
-    std::unordered_map<std::string, std::string> oldHashes;
-    std::ifstream infile(filename);
+void saveHashes(const std::unordered_map<std::string, std::string>& hashes, const std::string& path) {
+    std::ofstream out(path);
+    for (const auto& [p, h] : hashes)
+        out << p << "|" << h << "\n";
+}
+
+std::unordered_map<std::string, std::string> loadHashes(const std::string& path) {
+    std::unordered_map<std::string, std::string> hashes;
+    std::ifstream in(path);
     std::string line;
-    while (std::getline(infile, line)) {
-        size_t delimiterPos = line.find('|');
-        if (delimiterPos != std::string::npos) {
-            std::string path = std::filesystem::path(line.substr(0, delimiterPos)).lexically_normal().string();
-            std::string hash = line.substr(delimiterPos + 1);
-            oldHashes[path] = hash;
+    while (std::getline(in, line)) {
+        size_t delim = line.find('|');
+        if (delim != std::string::npos) {
+            std::string path = line.substr(0, delim);
+            std::string hash = line.substr(delim + 1);
+            hashes[path] = hash;
         }
     }
-    return oldHashes;
+    return hashes;
 }
 
-void compareHashes(const std::unordered_map<std::string, std::string>& oldHashes,
-                   const std::unordered_map<std::string, std::string>& newHashes) {
-    std::cout << "\n🔍 Change Detection:\n";
-    for (const auto& [path, hash] : newHashes) {
-        if (oldHashes.count(path)) {
-            std::cout << (oldHashes.at(path) == hash ? "✅ Unchanged: " : "✏️ Modified: ") << path << "\n";
-        } else {
-            std::cout << "🆕 New File: " << path << "\n";
-        }
-    }
-    for (const auto& [path, _] : oldHashes) {
-        if (!newHashes.count(path)) {
-            std::cout << "❌ Deleted File: " << path << "\n";
-        }
-    }
-}
-
-void saveHashes(const std::unordered_map<std::string, std::string>& hashes, const std::string& filename) {
-    std::ofstream outfile(filename);
-    for (const auto& [path, hash] : hashes) {
-        outfile << path << "|" << hash << "\n";
-    }
-}
-
-void requestFiles(SSL* ssl, const std::unordered_map<std::string, std::string>& newHashes,
+void requestFiles(SSL* ssl,
+                  const std::unordered_map<std::string, std::string>& newHashes,
                   const std::unordered_map<std::string, std::string>& oldHashes) {
     std::vector<std::string> filesToRequest;
     for (const auto& [path, hash] : newHashes) {
@@ -443,87 +430,107 @@ void requestFiles(SSL* ssl, const std::unordered_map<std::string, std::string>& 
             filesToRequest.push_back(path);
         }
     }
-    std::ostringstream requestMessage;
-    for (const auto& filePath : filesToRequest) {
-        requestMessage << filePath << "\n";
-    }
-    std::string reqStr = requestMessage.str();
+
+    std::ostringstream oss;
+    for (const std::string& f : filesToRequest) oss << f << "\n";
+
+    std::string req = oss.str();
     int numFiles = filesToRequest.size();
-    int msgLength = reqStr.size();
+    int reqLen = req.length();
+
     SSL_write(ssl, &numFiles, sizeof(numFiles));
-    SSL_write(ssl, &msgLength, sizeof(msgLength));
-    SSL_write(ssl, reqStr.c_str(), msgLength);
+    SSL_write(ssl, &reqLen, sizeof(reqLen));
+    SSL_write(ssl, req.c_str(), reqLen);
     std::cout << "📤 Requested " << numFiles << " file(s) from client\n";
 }
 
-void receiveFiles(SSL* ssl, const std::unordered_map<std::string, std::string>& expectedHashes) {
+void receiveFiles(SSL* ssl,
+                  const std::unordered_map<std::string, std::string>& expectedHashes,
+                  const std::string& clientID) {
     for (size_t i = 0; i < expectedHashes.size(); ++i) {
         int pathLen = 0;
-        if (SSL_read(ssl, &pathLen, sizeof(pathLen)) <= 0 || pathLen <= 0) continue;
+        if (SSL_read(ssl, &pathLen, sizeof(pathLen)) <= 0) continue;
 
-        std::vector<char> pathBuffer(pathLen);
-        if (SSL_read(ssl, pathBuffer.data(), pathLen) <= 0) continue;
-
-        std::string filepath(pathBuffer.begin(), pathBuffer.end());
-        std::string normalizedPath = std::filesystem::path(filepath).lexically_normal().string();
+        std::vector<char> pathBuf(pathLen);
+        if (SSL_read(ssl, pathBuf.data(), pathLen) <= 0) continue;
+        std::string filepath(pathBuf.begin(), pathBuf.end());
 
         int fileSize = 0;
-        if (SSL_read(ssl, &fileSize, sizeof(fileSize)) <= 0 || fileSize <= 0) continue;
+        if (SSL_read(ssl, &fileSize, sizeof(fileSize)) <= 0) continue;
 
-        std::vector<char> fileContent(fileSize);
-        int bytesReadTotal = 0;
-        while (bytesReadTotal < fileSize) {
-            int bytes = SSL_read(ssl, fileContent.data() + bytesReadTotal, fileSize - bytesReadTotal);
-            if (bytes <= 0) break;
-            bytesReadTotal += bytes;
+        std::vector<char> fileBuf(fileSize);
+        int total = 0;
+        while (total < fileSize) {
+            int readNow = SSL_read(ssl, fileBuf.data() + total, fileSize - total);
+            if (readNow <= 0) break;
+            total += readNow;
         }
 
-        std::string outputPath = "server_data/" + normalizedPath;
-        std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path());
-        std::ofstream outFile(outputPath, std::ios::binary);
-        if (!outFile) continue;
-        outFile.write(fileContent.data(), fileSize);
-        outFile.close();
+        std::string outPath = "server_data/" + clientID + "/" + filepath;
+        std::filesystem::create_directories(std::filesystem::path(outPath).parent_path());
+        std::ofstream out(outPath, std::ios::binary);
+        out.write(fileBuf.data(), fileSize);
 
-        std::string actualHash = picosha2::hash256_hex_string(fileContent.begin(), fileContent.end());
+        std::string actualHash = picosha2::hash256_hex_string(fileBuf.begin(), fileBuf.end());
+        std::string expectedHash = expectedHashes.at(filepath);
+
         std::cout << "\n🔎 Integrity Check for: " << filepath << "\n";
-        std::cout << "Expected: " << expectedHashes.at(normalizedPath) << "\n";
+        std::cout << "Expected: " << expectedHash << "\n";
         std::cout << "Actual:   " << actualHash << "\n";
-        std::cout << (expectedHashes.at(normalizedPath) == actualHash ? "✅ Verified\n" : "❌ Mismatch\n");
+        std::cout << (expectedHash == actualHash ? "✅ Verified\n" : "❌ Mismatch\n");
     }
 }
 
-int main() {
-    int server_fd = setupServerSocket();
-    int rawSock = acceptClient(server_fd);
-    SSL_CTX* ctx = initServerSSLContext();
+void handleClient(int sock, std::string clientIP, SSL_CTX* ctx) {
     SSL* ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, rawSock);
+    SSL_set_fd(ssl, sock);
 
     if (SSL_accept(ssl) <= 0) {
         std::cerr << "❌ SSL accept failed\n";
         ERR_print_errors_fp(stderr);
-        exit(EXIT_FAILURE);
+        close(sock);
+        return;
     }
-    std::cout << "🔐 SSL handshake completed!\n";
 
-    const std::string hashFile = "previous_hashes.txt";
-    const char* greeting = "Hello from server!";
-    SSL_write(ssl, greeting, strlen(greeting));
+    std::cout << "🔐 SSL handshake completed for " << clientIP << "!\n";
 
-    auto clientHashes = receiveHashesFromClient(ssl);
+    // ✅ Read client ID
+    int idLen;
+    SSL_read(ssl, &idLen, sizeof(idLen));
+    std::vector<char> idBuf(idLen);
+    SSL_read(ssl, idBuf.data(), idLen);
+    std::string clientID(idBuf.begin(), idBuf.end());
+    std::cout << "🆔 Client ID: " << clientID << "\n";
+
+    std::filesystem::create_directories("server_data/" + clientID);
+    std::filesystem::create_directories("server_hashes");
+    std::string hashPath = "server_hashes/hashes_" + clientID + ".txt";
+
+    auto oldHashes = loadHashes(hashPath);
+    auto newHashes = receiveHashesFromClient(ssl);
     auto deleted = receiveDeletedFiles(ssl);
-    deleteFilesFromServer(deleted);
-    auto oldHashes = loadPreviousHashes(hashFile);
-    compareHashes(oldHashes, clientHashes);
-    saveHashes(clientHashes, hashFile);
-    requestFiles(ssl, clientHashes, oldHashes);
-    receiveFiles(ssl, clientHashes);
+
+    deleteFilesFromServer(deleted, clientID);
+    requestFiles(ssl, newHashes, oldHashes);
+    receiveFiles(ssl, newHashes, clientID);
+    saveHashes(newHashes, hashPath);
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
+    close(sock);
+    std::cout << "🔒 Connection closed for " << clientIP << "\n";
+}
+
+int main() {
+    SSL_CTX* ctx = initServerSSLContext();
+    int server_fd = setupServerSocket();
+
+    while (true) {
+        auto [sock, ip] = acceptClient(server_fd);
+        std::thread(handleClient, sock, ip, ctx).detach();
+    }
+
     SSL_CTX_free(ctx);
-    close(rawSock);
     close(server_fd);
     return 0;
 }
