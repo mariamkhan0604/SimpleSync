@@ -1,24 +1,39 @@
-# Ignore compiled binaries
+# Compiled binaries
 bin/
+*.o
 
-# System files
+# System and OS files
 .DS_Store
 Thumbs.db
 
 # Temporary or backup files
 *~
 
-# IDE/editor files
+# IDE/editor settings
 .vscode/
 *.code-workspace
 
-# Hash tracking file (can be versioned if needed)
+# SSL certificates (MUST NOT be tracked)
+certs/
+
+# Server data and test files
+server_data/
+test_files/
+synced_data/
+
+# Hash and runtime metadata (leave out of Git)
+client_previous_hashes.txt
 previous_hashes.txt
 
-# Server sync data (exclude to avoid syncing test results)
-server_data/
-
-# Logs or dumps (if any)
+# Logs or debug outputs
 *.log
 *.dump
-test_files/
+# Ignore contents but keep folder structure
+server_data/*
+!server_data/.gitkeep
+
+test_files/*
+!test_files/.gitkeep
+
+data/*
+!data/.gitkeep

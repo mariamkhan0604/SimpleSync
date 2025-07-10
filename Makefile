@@ -1,5 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Iinclude
+LDFLAGS = -lssl -lcrypto
 
 SRC_DIR = src
 UTIL_DIR = $(SRC_DIR)/utils
@@ -14,11 +15,10 @@ SERVER_EXEC = $(BIN_DIR)/server_exec
 all: $(CLIENT_EXEC) $(SERVER_EXEC)
 
 $(CLIENT_EXEC): $(CLIENT_SRC)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(SERVER_EXEC): $(SERVER_SRC)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -f $(BIN_DIR)/*
-
