@@ -1,0 +1,23 @@
+# Ignore compiled binaries
+bin/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Temporary or backup files
+*~
+
+# IDE/editor files
+.vscode/
+*.code-workspace
+
+# Hash tracking file (can be versioned if needed)
+previous_hashes.txt
+
+# Server sync data (exclude to avoid syncing test results)
+server_data/
+
+# Logs or dumps (if any)
+*.log
+*.dump
