@@ -1,200 +1,3 @@
-// #include <iostream>
-// #include <unistd.h>
-// #include <string.h>
-// #include <sys/socket.h>
-// #include <arpa/inet.h>
-// #include <filesystem>
-// #include <fstream>
-// #include <unordered_map>
-// #include <sstream>
-// #include "../include/sha256.h"
-
-// #define PORT 8080
-// #define BUFFER_SIZE 1024
-
-// std::string computeFileHash(const std::string& filepath) {
-//     std::ifstream file(filepath, std::ios::binary);
-//     if (!file) {
-//         std::cerr << "❌ Could not open file: " << filepath << "\n";
-//         return "";
-//     }
-
-//     std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(file), {});
-//     std::vector<unsigned char> normalized;
-
-//     for (size_t i = 0; i < buffer.size(); ++i) {
-//         if (buffer[i] == '\r' && i + 1 < buffer.size() && buffer[i + 1] == '\n') {
-//             normalized.push_back('\n');
-//             ++i;
-//         } else {
-//             normalized.push_back(buffer[i]);
-//         }
-//     }
-
-//     return picosha2::hash256_hex_string(normalized);
-// }
-
-// int main() {
-//     int sock = 0;
-//     struct sockaddr_in serv_addr;
-//     char buffer[BUFFER_SIZE] = {0};
-
-//     sock = socket(AF_INET, SOCK_STREAM, 0);
-//     if (sock < 0) {
-//         std::cerr << "❌ Socket creation error\n";
-//         return -1;
-//     }
-
-//     serv_addr.sin_family = AF_INET;
-//     serv_addr.sin_port = htons(PORT);
-//     if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-//         std::cerr << "❌ Invalid address / Address not supported\n";
-//         return -1;
-//     }
-
-//     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-//         std::cerr << "❌ Connection Failed\n";
-//         return -1;
-//     }
-
-//     read(sock, buffer, BUFFER_SIZE);
-//     std::cout << "📩 Received from server: " << buffer << std::endl;
-//     memset(buffer, 0, sizeof(buffer));
-
-//     std::string directoryPath = "./test_files";
-//     std::unordered_map<std::string, std::string> fileHashes;
-
-//     std::unordered_map<std::string, std::string> oldClientHashes;
-//     std::ifstream prevFile("client_previous_hashes.txt");
-
-//     if (prevFile) {
-//         std::string line;
-//         while (std::getline(prevFile, line)) {
-//             size_t delim = line.find('|');
-//             if (delim != std::string::npos) {
-//                 std::string path = std::filesystem::path(line.substr(0, delim)).lexically_normal().generic_string();
-//                 std::string hash = line.substr(delim + 1);
-//                 oldClientHashes[path] = hash;
-//             }
-//         }
-//         prevFile.close();
-//     } else {
-//         std::ofstream createEmpty("client_previous_hashes.txt");
-//         createEmpty.close();
-//     }
-
-//     std::cout << "\n🔍 Computing file hashes...\n";
-//     for (const auto& entry : std::filesystem::recursive_directory_iterator(directoryPath)) {
-//         if (entry.is_regular_file()) {
-//             std::filesystem::path relPath = std::filesystem::relative(entry.path(), directoryPath);
-//             std::string normalizedPath = relPath.lexically_normal().generic_string();  // Normalize here
-//             std::string fullPath = entry.path().string();
-//             std::string hash = computeFileHash(fullPath);
-//             fileHashes[normalizedPath] = hash;
-
-//             std::cout << "📄 File: " << normalizedPath << "\n🔐 Hash: " << hash << "\n\n";
-//         }
-//     }
-
-//     // 🔍 DEBUG PRINT — See exact keys in both maps
-//     std::cout << "\n🔎 Comparing old and new file hashes...\n";
-//     std::cout << "🔹 Old client hashes:\n";
-//     for (const auto& [path, _] : oldClientHashes) {
-//         std::cout << "   - [" << path << "]\n";
-//     }
-//     std::cout << "🔹 New file hashes:\n";
-//     for (const auto& [path, _] : fileHashes) {
-//         std::cout << "   - [" << path << "]\n";
-//     }
-
-//     std::vector<std::string> deletedFiles;
-//     std::cout << "\n🗑️ Checking for deleted files...\n";
-//     for (const auto& [path, _] : oldClientHashes) {
-//         if (fileHashes.find(path) == fileHashes.end()) {
-//             std::cout << "   ❌ Marked as deleted: " << path << "\n";
-//             deletedFiles.push_back(path);
-//         } else {
-//             std::cout << "   ✅ Still present: " << path << "\n";
-//         }
-//     }
-
-//     std::ostringstream ss;
-//     ss << "Hello from client!\n";
-//     for (const auto& [path, hash] : fileHashes) {
-//         ss << path << "|" << hash << "\n";
-//     }
-//     std::string allData = ss.str();
-
-//     std::cout << "📤 Sending to server:\n" << allData << "\n";
-//     int dataSize = allData.size();
-//     send(sock, &dataSize, sizeof(dataSize), 0);
-//     send(sock, allData.c_str(), dataSize, 0);
-//     std::cout << "✅ Sent greeting + file hashes to server\n";
-
-//     int delCount = deletedFiles.size();
-//     send(sock, &delCount, sizeof(delCount), 0);
-//     for (const std::string& delPath : deletedFiles) {
-//         int len = delPath.size();
-//         send(sock, &len, sizeof(len), 0);
-//         send(sock, delPath.c_str(), len, 0);
-//     }
-//     std::cout << "🗑️ Sent " << delCount << " deleted file paths to server\n";
-
-//     int numFilesToSend = 0;
-//     read(sock, &numFilesToSend, sizeof(numFilesToSend));
-//     std::cout << "📥 Server requested " << numFilesToSend << " file(s)\n";
-
-//     int msgLength = 0;
-//     read(sock, &msgLength, sizeof(msgLength));
-
-//     int totalRead = 0;
-//     std::string filePathsRaw;
-//     while (totalRead < msgLength) {
-//         int bytes = read(sock, buffer, std::min(BUFFER_SIZE, msgLength - totalRead));
-//         if (bytes <= 0) break;
-//         filePathsRaw.append(buffer, bytes);
-//         totalRead += bytes;
-//     }
-
-//     std::vector<std::string> filesToSend;
-//     std::istringstream pathStream(filePathsRaw);
-//     std::string line;
-//     while (std::getline(pathStream, line)) {
-//         if (!line.empty()) {
-//             filesToSend.push_back(line);
-//         }
-//     }
-
-//     for (const auto& relPath : filesToSend) {
-//         std::string fullPath = directoryPath + "/" + relPath;
-//         std::ifstream file(fullPath, std::ios::binary);
-//         if (!file) {
-//             std::cerr << "❌ Could not open file: " << fullPath << "\n";
-//             continue;
-//         }
-
-//         std::vector<char> fileData((std::istreambuf_iterator<char>(file)), {});
-//         int pathLen = relPath.size();
-//         int fileSize = fileData.size();
-
-//         std::cout << "📤 Sending file: " << relPath << " (" << fileSize << " bytes)\n";
-//         send(sock, &pathLen, sizeof(pathLen), 0);
-//         send(sock, relPath.c_str(), pathLen, 0);
-//         send(sock, &fileSize, sizeof(fileSize), 0);
-//         send(sock, fileData.data(), fileSize, 0);
-//     }
-
-//     std::ofstream updated("client_previous_hashes.txt");
-//     for (const auto& [path, hash] : fileHashes) {
-//         updated << path << "|" << hash << "\n";
-//     }
-//     updated.close();
-
-//     shutdown(sock, SHUT_WR);
-//     close(sock);
-//     return 0;
-// }
-// Modularized client.cpp with full function definitions
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -219,7 +22,7 @@ SSL_CTX* initClientSSLContext() {
     const SSL_METHOD* method = TLS_client_method();
     SSL_CTX* ctx = SSL_CTX_new(method);
     if (!ctx) {
-        std::cerr << "❌ Failed to create SSL context\n";
+        std::cerr << "Failed to create SSL context\n";
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
@@ -229,7 +32,7 @@ SSL_CTX* initClientSSLContext() {
 int createSocket() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        std::cerr << "❌ Socket creation error\n";
+        std::cerr << "Socket creation error\n";
         exit(EXIT_FAILURE);
     }
     return sock;
@@ -240,11 +43,11 @@ bool connectToServer(int sock, const std::string& ip, int port) {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(port);
     if (inet_pton(AF_INET, ip.c_str(), &serv_addr.sin_addr) <= 0) {
-        std::cerr << "❌ Invalid address\n";
+        std::cerr << "Invalid address\n";
         return false;
     }
     if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        std::cerr << "❌ Connection Failed\n";
+        std::cerr << "Connection Failed\n";
         return false;
     }
     return true;
@@ -394,7 +197,7 @@ int main(int argc, char* argv[]) {
     SSL_set_fd(ssl, sock);
 
     if (SSL_connect(ssl) <= 0) {
-        std::cerr << "❌ SSL connection failed\n";
+        std::cerr << "SSL connection failed\n";
         ERR_print_errors_fp(stderr);
         return -1;
     }

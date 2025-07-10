@@ -7,7 +7,7 @@
 std::string getFileHash(const std::string& filePath) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file) {
-        std::cerr << "❌ Could not open file: " << filePath << std::endl;
+        std::cerr << "Could not open file: " << filePath << std::endl;
         return "";
     }
 
